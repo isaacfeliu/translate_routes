@@ -7,11 +7,20 @@ module ActionController
 
     module Translator
       
+      mattr_accessor :prefix
+      @@prefix = true
+
       mattr_accessor :prefix_on_default_locale
       @@prefix_on_default_locale = false
 
       mattr_accessor :locale_param_key
       @@locale_param_key = :locale  # set to :locale for params[:locale]
+      
+      mattr_accessor :no_translate
+      @@no_translate = /^Z$/
+      
+      mattr_accessor :default_locale
+      @@default_locale = nil
 
       mattr_accessor :original_routes, :original_named_routes, :original_names, :dictionaries
 
@@ -43,7 +52,7 @@ module ActionController
       private
 
         def self.default_locale
-          I18n.default_locale.to_s
+          @@default_locale || I18n.default_locale.to_s
         end
 
         def self.init_dictionaries
@@ -90,9 +99,16 @@ module ActionController
           @@original_routes.each do |old_route|
 
             old_name = @@original_named_routes.index(old_route)
-            # process and add the translated ones
-            trans_routes, trans_named_routes = translate_route(old_route, old_name)
-
+            
+            if old_route.segments.inject("") { |str,s| str << s.to_s }.match(@@no_translate)
+              @@original_names.delete(old_name)
+              trans_routes = [ Route.new(old_route.segments, locale_requirements(old_route, default_locale), old_route.conditions).freeze ]
+              trans_named_routes = { old_name => trans_routes.first } if old_name
+            else
+              # process and add the translated ones
+              trans_routes, trans_named_routes = translate_route(old_route, old_name)
+            end
+            
             if old_name
               new_named_routes.merge! trans_named_routes
             end
@@ -124,7 +140,7 @@ module ActionController
         end
 
         def self.add_prefix?(lang)
-          @@prefix_on_default_locale || lang != default_locale
+          @@prefix && (@@prefix_on_default_locale || lang != default_locale)
         end
 
         def self.translate_static_segment(segment, locale)
@@ -162,15 +178,15 @@ module ActionController
         def self.locale_requirements(orig, locale)
           orig.requirements.merge(@@locale_param_key => locale)
         end
-
-        def self.translate_route_by_locale(orig, locale, orig_name=nil)
+        
+        def self.translate_route_by_locale(orig, locale)
           segments = locale_segments(orig, locale)
           requirements = locale_requirements(orig, locale)
           conditions = orig.conditions
           
           Route.new(segments, requirements, conditions).freeze
         end
-
+        
         def self.root_route?(route)
           route.segments.length == 1
         end
@@ -184,9 +200,8 @@ module ActionController
             new_routes << route
             new_named_routes[route_name] = route
           end
-
           available_locales.each do |locale|
-            translated = translate_route_by_locale(route, locale, route_name)
+            translated = translate_route_by_locale(route, locale)
             new_routes << translated          
             locale_suffix = locale_suffix(locale)
             new_named_routes["#{route_name}_#{locale_suffix}".to_sym] = translated if route_name
