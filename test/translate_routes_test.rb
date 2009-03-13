@@ -1,5 +1,6 @@
 require 'test/unit'
 require 'rubygems'
+require 'mocha'
 require 'action_controller'
 require 'action_controller/test_process'
 require 'active_support'
@@ -264,7 +265,40 @@ class TranslateRoutesTest < Test::Unit::TestCase
     assert_routing '/es/gente', :controller => 'people', :action => 'index', :locale => 'es'
     assert_helpers_include :people_fr, :people_en, :people_es, :people
   end
+  
+  # no prefix should'nt set prefix in any locale
+  def test_with_prefix_false_shouldnt_set_prefix_in_any_locale
+    ActionController::Routing::Routes.draw { |map| map.people 'people', :controller => 'people', :action => 'index' }
+    config_default_locale_settings('en', true, false)
+    ActionController::Routing::Translator.translate { |t| t['en'] = {}; t['es'] = {'people' => 'gente'} }
+  
+    assert_routing '/gente', :controller => 'people', :action => 'index', :locale => 'es'
+    assert_routing '/people', :controller => 'people', :action => 'index', :locale => 'en'
+    assert_helpers_include :people_en, :people_es, :people
+  end
 
+  # no prefix should'nt set prefix in any locale
+  def test_with_no_translate_regexp_shouldnt_translate_nor_create_helpers
+    ActionController::Routing::Routes.draw { |map| map.people 'people', :controller => 'people', :action => 'index' }
+    config_default_locale_settings('en', true, true, /^\/people(.*)/)
+    ActionController::Routing::Translator.translate { |t| t['en'] = {}; t['es'] = {} }
+  
+    assert_routing '/people', :controller => 'people', :action => 'index', :locale => 'en'
+    assert_helpers_include :people
+    assert_helpers_dont_include :people_es, :people_en
+  end
+  
+  # setting a default locale should override I18n.default_locale (for those still using gettext)
+  def test_with_default_locale_should_override_i18n_default_locale
+    ActionController::Routing::Routes.draw { |map| map.people 'people', :controller => 'people', :action => 'index' }
+    config_default_locale_settings('en', true, true, /^\/people(.*)/, 'es')
+    ActionController::Routing::Translator.translate { |t| t['en'] = {}; t['es'] = {} }
+  
+    assert_routing '/people', :controller => 'people', :action => 'index', :locale => 'es'
+    assert_helpers_include :people
+    assert_helpers_dont_include :people_es, :people_en
+  end
+  
   def test_action_controller_gets_locale_setter
     ActionController::Base.instance_methods.include?('set_locale_from_url')
   end
@@ -287,35 +321,45 @@ class TranslateRoutesTest < Test::Unit::TestCase
     end
   end
   
+  def assert_helpers_dont_include(*helpers)
+    helpers.each do |helper|
+      ['_url', '_path'].each do |suffix|    
+        [@controller, @view].each { |obj| assert_raise Test::Unit::AssertionFailedError do; assert_respond_to obj, "#{helper}#{suffix}".to_sym; end }
+      end
+    end
+  end
+  
   def assert_unrecognized_route(route_path, options)
     assert_raise ActionController::RoutingError do
       assert_routing route_path, options
     end
   end
 
-  def config_default_locale_settings(locale, with_prefix)
+  def config_default_locale_settings(locale, with_prefix, prefix = true, no_translate = /^Z$/, default_locale = nil)
     I18n.default_locale = locale
     ActionController::Routing::Translator.prefix_on_default_locale = with_prefix
+    ActionController::Routing::Translator.prefix = prefix
+    ActionController::Routing::Translator.no_translate = no_translate
+    ActionController::Routing::Translator.default_locale = default_locale
+  end
+end
+
+class StubbedI18nBackend
+  
+  
+  @@translations = { 
+    'es' => { 'people' => 'gente'}, 
+    'fr' => {} # empty on purpose to test behaviour on incompleteness scenarios
+  }
+  
+  def self.translate(locale, key, options)
+    @@translations[locale][key] || options[:default]
+  rescue 
+    options[:default]
   end
 
-  class StubbedI18nBackend
-    
-    
-    @@translations = { 
-      'es' => { 'people' => 'gente'}, 
-      'fr' => {} # empty on purpose to test behaviour on incompleteness scenarios
-    }
-    
-    def self.translate(locale, key, options)
-      @@translations[locale][key] || options[:default]
-    rescue 
-      options[:default]
-    end
-
-    def self.available_locales
-      @@translations.keys
-    end
-    
+  def self.available_locales
+    @@translations.keys
   end
   
 end
